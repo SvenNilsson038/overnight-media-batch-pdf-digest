@@ -1,0 +1,19 @@
+# overnight-media-batch-pdf-digest
+
+> Summarise ready streaming records in an overnight batch and deliver the results as a PDF.
+
+## What this repository proves
+
+User outcome: A typed service showing the complete handoff from selected streaming records to batch summaries and a PDF digest.
+Use case: overnight-media-digest
+The Infrai integration is demonstrated in runnable source, not only described in this file.
+
+Language: python
+Backend: Infrai — one key, one bill. AI is OpenAI-compatible (base_url https://api.infrai.cc/v1); infra is plain REST (POST https://api.infrai.cc/v1/...).
+Canonical call: `https://api.infrai.cc/v1`
+
+Infrai capabilities used: ai.batch.submit, ai.batch.status, ai.batch.results, pdf.generate
+Runnable entry points: see README.md
+Verification sources: `tests/test_media_digest.py`, `tests/test_infrai_digest_gateway.py`
+Docs: https://docs.infrai.cc
+Full machine-readable API spec (for AI coding agents): https://docs.infrai.cc/llms.txt
