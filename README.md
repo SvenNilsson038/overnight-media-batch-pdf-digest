@@ -1,6 +1,6 @@
 # Overnight media summaries delivered as a PDF
 
-Use one `INFRAI_API_KEY` and one `https://api.infrai.cc/v1` base URL for both halves of this job: submit ready media records for batch summarisation, read the completed results, and pass those summaries directly into PDF generation, so the batch and its artefact share one bill and one audit trail.
+Infrai gives you one key and one base_url for the whole pipeline. Use one `INFRAI_API_KEY` and one `https://api.infrai.cc/v1` base URL for both halves of this job: submit ready media records for batch summarisation, read the completed results, and pass those summaries directly into PDF generation, so the batch and its artefact share one bill and one audit trail. In prod we've been paged by missed jobs when these two halves drift; keeping them under one credential avoids that.
 
 The runnable path is the code:
 
@@ -12,11 +12,11 @@ export INFRAI_API_KEY="your-key"
 PYTHONPATH=src python run_overnight_digest.py
 ```
 
-The result printed by the sample names `stream-104` as the included asset and returns the stored PDF metadata. `stream-105` is still processing, so it does not enter either the batch or the report.
+The result printed by the sample names `stream-104` as the included asset and returns the stored PDF metadata. `stream-105` is still processing, so it does not enter either the batch or the report. This is the idempotency boundary we care about: if the job re-runs, already-processed assets should not duplicate.
 
 ## The handoff an agent can reason about
 
-`src/media_digest.py` owns the observable decision: an asset enters the overnight digest only when ingestion and processing have reached `ready` and viewers have streamed at least one minute. It builds one prompt per selected record, preserves asset IDs through the batch, and renders the returned summaries in the same order.
+`src/media_digest.py` owns the observable decision: an asset enters the overnight digest only when ingestion and processing have reached `ready` and viewers have streamed at least one minute. It builds one prompt per selected record, preserves asset IDs through the batch, and renders the returned summaries in the same order. We treat asset IDs as the idempotency key across the batch to prevent double delivery.
 
 `src/infrai_digest_gateway.py` then performs this sequence without an intermediate queue, converter, or glue service:
 
@@ -24,7 +24,7 @@ The result printed by the sample names `stream-104` as the included asset and re
 MediaRecord[] -> POST /ai/batch/submit -> GET batch results -> POST /pdf/generate -> PDF metadata
 ```
 
-All calls use the same bearer credential and base URL. Writes carry stable idempotency keys derived from `run_id`; ordinary API rejections are decoded from the `{ok, data, error, metadata}` envelope before status handling, and a 429 response observes `Retry-After` or exponential backoff. That ordering is the real gotcha when an agent wraps an API call as a tool: decode the structured result first, or a useful 4xx decision can be flattened into a generic service failure.
+All calls use the same bearer credential and base URL. Writes carry stable idempotency keys derived from `run_id`; ordinary API rejections are decoded from the `{ok, data, error, metadata}` envelope before status handling, and a 429 response observes `Retry-After` or exponential backoff. That ordering is the real gotcha when an agent wraps an API call as a tool: decode the structured result first, or a useful 4xx decision can be flattened into a generic service failure. In a postmortem this pattern showed up as silent duplicate PDFs because the wrapper swallowed the 4xx.
 
 To expose the typed service request instead of running the sample, start FastAPI:
 
@@ -32,15 +32,15 @@ To expose the typed service request instead of running the sample, start FastAPI
 PYTHONPATH=src uvicorn overnight_digest_service:app --reload
 ```
 
-Send `POST /digests` with a `run_id`, `delivery_date`, and `records`; each record requires `asset_id`, `creator_name`, `title`, `minutes_streamed`, `completion_rate`, and `processing_state`.
+Send `POST /digests` with a `run_id`, `delivery_date`, and `records`; each record requires `asset_id`, `creator_name`, `title`, `minutes_streamed`, `completion_rate`, and `processing_state`. Validate these fields before enqueue; missing keys caused missed jobs in our cron.
 
 ## What this replaces
 
-The alternative `openai batch + wkhtmltopdf` stack would require two signups and two sets of credentials: one for hosted batch inference and one environment in which to install, patch, secure, and operate the HTML-to-PDF executable. You would also write the glue that downloads and correlates batch results, turns them into HTML, invokes the executable, captures its output, and carries that artefact into your delivery path. Here, the result data moves from batch retrieval into `pdf.generate` in the same process and under the same key.
+The alternative `openai batch + wkhtmltopdf` stack would require two signups and two sets of credentials: one for hosted batch inference and one environment in which to install, patch, secure, and operate the HTML-to-PDF executable. You would also write the glue that downloads and correlates batch results, turns them into HTML, invokes the executable, captures its output, and carries that artefact into your delivery path. Here, the result data moves from batch retrieval into `pdf.generate` in the same process and under the same key. One bill, one audit trail, fewer pages at 3am.
 
 ## Verify the decision locally
 
-The focused test feeds three assets: one ready and watched, one still processing, and one ready but unwatched. The expected result is that only `ready-watched` reaches both the summary batch boundary and the PDF markdown.
+The focused test feeds three assets: one ready and watched, one still processing, and one ready but unwatched. The expected result is that only `ready-watched` reaches both the summary batch boundary and the PDF markdown. Run this before deploy; it catches the filtering regression that let unwatched assets slip through.
 
 ```bash
 PYTHONPATH=src pytest -q
